@@ -107,6 +107,25 @@ both platforms. A platform's `SpatialCanvas` becomes close to a plain
 `.map()` over `scene.instruments` plus one camera assignment — there is very
 little decision left for it to make.
 
+## 2b. Projection — the scene as 2D segments
+
+```ts
+export function projectScene(scene: SpatialScene, viewport: Viewport): ProjectedScene;
+```
+
+Added for `music_spatial_rn`, which has no GL context to hand a renderer
+(`music_app_rn` is a bare app with macOS and Windows targets; `expo-gl` runs
+on neither). Every model is polylines, so the stage is a projection problem,
+not a rasterisation one: this composes the same transforms `buildScene`
+hands the web canvas — using three's own `Matrix4`/`Euler`, so the two
+cannot disagree on a sign — and returns pixel-space line segments per
+instrument (with the web's linear fog as a per-instrument fade) plus the
+floor grid and stage ring batched by fog level, near-plane clipped and
+ordered far to near. The RN package draws them with Skia (SVG on Windows);
+nothing platform-specific is left to get the camera wrong in. Pinned by
+`project.test.ts`: centre of view, left/right, up, near-plane clipping,
+scale, fog and ordering.
+
 ## 3. Movement
 
 Spatial-view-specific behavior — nothing else in either app ever calls

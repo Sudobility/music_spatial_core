@@ -2,6 +2,7 @@ export * from './geometry';
 export * from './map-math';
 export * from './movement';
 export * from './scene';
+export * from './project';
 export * from './use-throttled-commit';
 
 // Re-exported for the platform packages, which already depend on
