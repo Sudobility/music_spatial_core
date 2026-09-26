@@ -53,18 +53,27 @@ level up, in each platform package, which is the only place it can.
 import type { InstrumentSpatialModel, InstrumentPose } from "@sudobility/music_types";
 import type { BufferGeometry } from "three";
 
-/** One drawable stroke, set up for `THREE.LineSegments`, already positioned/
- *  rotated/scaled per the model's own pose — the caller places the whole
- *  group at the track's stage position and does nothing further to it. */
+/** ONE geometry per model — every stroke merged, laid out for
+ *  `THREE.LineSegments` — cached by model identity. The pose is not baked
+ *  in; it becomes the object transform `buildInstruments` hands back. */
 export function buildInstrumentGeometry(
   model: InstrumentSpatialModel,
-  pose: InstrumentPose,
-): readonly BufferGeometry[];
+): BufferGeometry;
+
+/** Sum over the strokes of (points - 1): what the per-stroke draw-call
+ *  count used to be, and half the merged geometry's vertex count. */
+export function instrumentSegmentCount(model: InstrumentSpatialModel): number;
 ```
 
 Pure `three` math (`Vector3`, matrix transforms) — no scene graph, no
-renderer. Both platform packages wrap each returned geometry in their own
-`<lineSegments geometry={g} />`, which is in fact identical JSX either way:
+renderer. It was one geometry per *stroke* at first, and each platform drew
+one `<lineSegments>` + one material per stroke: measured on a four-track
+band, ~645 draw calls for 6,850 vertices, 58% of the strokes across the GM
+models being a single two-vertex segment. Every stroke of a model is drawn
+in one colour (`InstrumentSpatialModel` has no per-stroke colour or width),
+so they are merged — one draw call per instrument. Both platform packages
+wrap the geometry in their own `<lineSegments geometry={g} />`, which is in
+fact identical JSX either way:
 `@react-three/fiber`'s intrinsic elements are the same vocabulary on web and
 native, so this is where sharing very nearly extends into the platform
 packages' own render code too, short of the `Canvas` mount itself.
@@ -76,7 +85,7 @@ export type Vec3Tuple = readonly [number, number, number];
 
 export interface SpatialInstrument {
   readonly trackId: string;
-  readonly geometry: readonly BufferGeometry[];
+  readonly geometry: BufferGeometry; // the whole model, one draw call
   readonly position: Vec3Tuple;   // stage position, from the arrangement
   readonly rotation: Vec3Tuple;   // radians: pose + facing-the-audience default
   readonly lit: boolean;          // trackId ∈ soundingTrackIds
@@ -93,19 +102,36 @@ export interface SpatialScene {
   readonly camera: SpatialCamera;
 }
 
+/** Reads the tracks, their stage positions and the lit set — never the listener. */
+export function buildInstruments(
+  tracks: readonly SpatialTrack[],
+  arrangementTracks: EffectiveUnpluggedArrangement["tracks"],
+  soundingTrackIds: ReadonlySet<string>,
+): readonly SpatialInstrument[];
+
+/** Reads the listener and nothing else. */
+export function cameraFor(listener: UnpluggedListener): SpatialCamera;
+
+/** The two composed, from `effectiveUnpluggedArrangement(score)`. */
 export function buildScene(
   score: Score,
   soundingTrackIds: ReadonlySet<string>,
 ): SpatialScene;
 ```
 
-The single function each platform package calls once per relevant render:
-resolving each track's model via `spatialModelForTrack`, its position via
+Resolving each track's model via `spatialModelForTrack`, its position via
 `effectiveUnpluggedArrangement`, its geometry via `buildInstrumentGeometry`,
 and the camera transform from the listener are all pure and identical on
 both platforms. A platform's `SpatialCanvas` becomes close to a plain
-`.map()` over `scene.instruments` plus one camera assignment — there is very
+`.map()` over the instruments plus one camera assignment — there is very
 little decision left for it to make.
+
+The two halves are separate functions so a platform memoises them apart.
+The listener moves on every walking frame; when the whole scene was one
+memo keyed on `score`, every step re-created every instrument's element to
+move a camera that was the only thing that had changed. `buildInstruments`
+is keyed on the tracks, the arrangement's `tracks` and the lit set;
+`cameraFor` on the listener alone.
 
 ## 2b. Projection — the scene as 2D segments
 

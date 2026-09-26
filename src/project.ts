@@ -161,13 +161,11 @@ class Projector {
     const segments: number[] = [];
     const a = new Vector3();
     const b = new Vector3();
-    for (const geometry of instrument.geometry) {
-      const positions = geometry.getAttribute('position');
-      for (let i = 0; i + 1 < positions.count; i += 2) {
-        a.fromBufferAttribute(positions, i).applyMatrix4(modelView);
-        b.fromBufferAttribute(positions, i + 1).applyMatrix4(modelView);
-        this.pushSegment(segments, a, b);
-      }
+    const positions = instrument.geometry.getAttribute('position');
+    for (let i = 0; i + 1 < positions.count; i += 2) {
+      a.fromBufferAttribute(positions, i).applyMatrix4(modelView);
+      b.fromBufferAttribute(positions, i + 1).applyMatrix4(modelView);
+      this.pushSegment(segments, a, b);
     }
 
     const distance = this.eye.distanceTo(new Vector3(px, py, pz));

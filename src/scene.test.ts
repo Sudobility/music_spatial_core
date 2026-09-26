@@ -1,6 +1,73 @@
 import { describe, expect, it } from 'vitest';
+import { BufferGeometry } from 'three';
+import { effectiveUnpluggedArrangement } from '@sudobility/music_types';
+import type { Score } from '@sudobility/music_types';
 import { twoTrackScore } from '@sudobility/music_types/test';
-import { buildScene } from './scene';
+import { buildInstruments, buildScene, cameraFor } from './scene';
+
+/** The four-track band the draw-call audit was measured on: piano, bass,
+ *  string ensemble, drum kit. */
+function bandScore(): Score {
+  const base = twoTrackScore();
+  const [template] = base.tracks;
+  const band = [
+    { id: 'piano', name: 'Piano', clef: 'treble', midiProgram: 0 },
+    { id: 'bass', name: 'Bass', clef: 'bass', midiProgram: 33 },
+    { id: 'strings', name: 'Strings', clef: 'treble', midiProgram: 48 },
+    { id: 'kit', name: 'Drums', clef: 'percussion', midiProgram: 0 },
+  ] as const;
+  return {
+    ...base,
+    tracks: band.map(t => ({ ...template, ...t })),
+  };
+}
+
+describe('buildInstruments / cameraFor', () => {
+  it('gives a four-track band exactly four geometries — one per track, not one per stroke', () => {
+    const score = bandScore();
+    const instruments = buildInstruments(
+      score.tracks,
+      effectiveUnpluggedArrangement(score).tracks,
+      new Set()
+    );
+    expect(instruments).toHaveLength(4);
+    for (const instrument of instruments) {
+      expect(instrument.geometry).toBeInstanceOf(BufferGeometry);
+      expect(
+        instrument.geometry.getAttribute('position').count
+      ).toBeGreaterThan(0);
+    }
+  });
+
+  it('does not read the listener: the same instruments come back wherever the listener stands', () => {
+    const score = bandScore();
+    const tracks = effectiveUnpluggedArrangement(score).tracks;
+    const here = buildInstruments(score.tracks, tracks, new Set(['bass']));
+    const there = buildInstruments(score.tracks, tracks, new Set(['bass']));
+    expect(there).toEqual(here);
+    // And the geometry is shared by identity, not rebuilt.
+    here.forEach((instrument, i) => {
+      expect(there[i].geometry).toBe(instrument.geometry);
+    });
+  });
+
+  it('composes into exactly what buildScene returns', () => {
+    const score = {
+      ...bandScore(),
+      unplugged: {
+        listener: { x: 1.5, z: -2, facingDeg: 30 },
+        tracks: { piano: { x: 2, z: 3 } },
+      },
+    };
+    const sounding = new Set(['kit']);
+    const arrangement = effectiveUnpluggedArrangement(score);
+    const scene = buildScene(score, sounding);
+    expect(scene.instruments).toEqual(
+      buildInstruments(score.tracks, arrangement.tracks, sounding)
+    );
+    expect(scene.camera).toEqual(cameraFor(arrangement.listener));
+  });
+});
 
 describe('buildScene', () => {
   it('produces one instrument per track', () => {
@@ -23,10 +90,12 @@ describe('buildScene', () => {
     expect(treble.litColor).not.toBe(bass.litColor);
   });
 
-  it('gives each instrument at least one drawable geometry', () => {
+  it('gives each instrument one drawable geometry', () => {
     const scene = buildScene(twoTrackScore(), new Set());
     for (const instrument of scene.instruments) {
-      expect(instrument.geometry.length).toBeGreaterThan(0);
+      expect(
+        instrument.geometry.getAttribute('position').count
+      ).toBeGreaterThan(0);
     }
   });
 

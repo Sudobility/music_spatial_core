@@ -29,7 +29,7 @@ function instrumentAt(
 ): SpatialInstrument {
   return {
     trackId,
-    geometry: [geometry],
+    geometry,
     position,
     rotation: [0, 0, 0],
     scale: 1,
