@@ -1,6 +1,6 @@
 {
   "name": "@sudobility/music_spatial_core",
-  "version": "0.0.13",
+  "version": "0.0.14",
   "description": "Platform-agnostic engine behind the Moosiac Spatial view: instrument geometry, scene composition, camera/listener math, movement, and map-overlay math shared by music_spatial and music_spatial_rn.",
   "type": "module",
   "main": "./dist/index.js",

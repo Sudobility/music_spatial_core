@@ -41,6 +41,8 @@ import type {
 } from '@sudobility/music_types';
 import { buildInstrumentGeometry } from './geometry';
 import { trackColors } from './colors';
+import { FEMALE_VOCALIST, MALE_VOCALIST } from './voice-models';
+import type { PerformerModel } from './voice-models';
 
 export type Vec3Tuple = readonly [number, number, number];
 
@@ -105,13 +107,20 @@ export function buildInstruments(
 
   return tracks.map(track => {
     const point = arrangementTracks[track.id] ?? { x: 0, z: 0 };
-    const { model, pose } = trackSpatialModel(track);
+    const resolved = trackSpatialModel(track);
+    const performer: PerformerModel | undefined =
+      track.clef !== 'percussion' && track.midiProgram === 52
+        ? MALE_VOCALIST
+        : track.clef !== 'percussion' && track.midiProgram === 53
+          ? FEMALE_VOCALIST
+          : undefined;
+    const { pose } = resolved;
     const lit = soundingTrackIds.has(track.id);
     const color = colors[track.id];
 
     return {
       trackId: track.id,
-      geometry: buildInstrumentGeometry(model),
+      geometry: buildInstrumentGeometry(performer?.lineModel ?? resolved.model),
       // x mirrored — see the module doc.
       position: [
         -(point.x + pose.position[0]),
