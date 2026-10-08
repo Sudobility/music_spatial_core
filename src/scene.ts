@@ -41,8 +41,7 @@ import type {
 } from '@sudobility/music_types';
 import { buildInstrumentGeometry } from './geometry';
 import { trackColors } from './colors';
-import { FEMALE_VOCALIST, MALE_VOCALIST } from './voice-models';
-import type { PerformerModel } from './voice-models';
+import { performerForTrack } from './voice-models';
 
 export type Vec3Tuple = readonly [number, number, number];
 
@@ -77,7 +76,7 @@ export type SpatialTrack = Pick<Track, 'id' | 'name' | 'clef' | 'midiProgram'>;
 const GROUND_Y = 0;
 
 /** A first-person listener's ear height above the floor. */
-const EAR_HEIGHT = 1.6;
+export const EAR_HEIGHT = 1.6;
 
 /**
  * Every instrument on stage is yawed 180° from its authored rest
@@ -108,12 +107,7 @@ export function buildInstruments(
   return tracks.map(track => {
     const point = arrangementTracks[track.id] ?? { x: 0, z: 0 };
     const resolved = trackSpatialModel(track);
-    const performer: PerformerModel | undefined =
-      track.clef !== 'percussion' && track.midiProgram === 52
-        ? MALE_VOCALIST
-        : track.clef !== 'percussion' && track.midiProgram === 53
-          ? FEMALE_VOCALIST
-          : undefined;
+    const performer = performerForTrack(track);
     const { pose } = resolved;
     const lit = soundingTrackIds.has(track.id);
     const color = colors[track.id];

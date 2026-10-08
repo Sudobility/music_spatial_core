@@ -21,7 +21,7 @@ describe('useThrottledCommit', () => {
     expect(commit).not.toHaveBeenCalled();
   });
 
-  it('commits the latest value on the next frame', async () => {
+  it('commits nothing while the gesture continues, then only the latest value on commitNow', async () => {
     const commit = vi.fn();
     const { result } = renderHook(() => useThrottledCommit(0, commit));
     act(() => {
@@ -30,6 +30,11 @@ describe('useThrottledCommit', () => {
       result.current.setValue(3);
     });
     await new Promise(resolve => requestAnimationFrame(resolve));
+    // A frame passing is not the end of the gesture: the store is untouched.
+    expect(commit).not.toHaveBeenCalled();
+    act(() => {
+      result.current.commitNow();
+    });
     // Every intermediate value was skipped — only the latest reaches the store.
     expect(commit).toHaveBeenCalledTimes(1);
     expect(commit).toHaveBeenCalledWith(3);

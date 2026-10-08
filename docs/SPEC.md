@@ -240,14 +240,12 @@ share a common shape to unify without an abstraction costing more than it
 saves for two call sites. Everything downstream of "here is a pixel
 position" is shared.
 
-## 5. The throttled-commit hook
+## 5. The local-preview commit hook
 
-The drag-performance fix already built and verified for the 2D map — local
-state for instant visual feedback, `requestAnimationFrame`-throttled store
-commits, a guaranteed final synchronous commit on release — has no DOM or RN
-dependency in it: `useState`/`useRef`/`useCallback` are core React, and
-`requestAnimationFrame` is standard on both web and RN (RN polyfills it). So
-the hook itself, not just the pattern, is shareable:
+Map drags update local React state on each input event so markers follow the
+pointer or touch in real time. Store writes happen once, synchronously, when
+the gesture ends; auto-walk is a local preview and never writes audience
+positions. The shared hook has no DOM or RN dependency:
 
 ```ts
 export function useThrottledCommit<T>(
@@ -255,14 +253,13 @@ export function useThrottledCommit<T>(
   commit: (value: T) => void,
 ): {
   readonly value: T;                    // the throttled-for-display value
-  readonly setValue: (next: T) => void; // instant local update + scheduled commit
-  readonly commitNow: () => void;       // forces the pending commit through (drag end)
+  readonly setValue: (next: T) => void; // instant local preview, no store write
+  readonly commitNow: () => void;       // commits the pending value on gesture end
 };
 ```
 
-Both platforms' drag handlers call `setValue` on every raw move event (from
-whichever event system) and `commitNow` on release; neither reimplements the
-throttling.
+Both platforms' drag handlers call `setValue` on every move event and
+`commitNow` on release. Neither saves during a drag.
 
 ## What's still genuinely platform-specific — the honest remainder
 

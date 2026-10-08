@@ -1,4 +1,5 @@
 export * from './geometry';
+export * from './stage-drag';
 export * from './map-math';
 export * from './movement';
 export * from './scene';
