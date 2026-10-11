@@ -6,6 +6,8 @@
  *
  * Each result is derived from the gesture's initial listener and coordinates,
  * so there is no accumulated drift or motion after the pointer stops.
+ *
+ * Worklets, so a React Native host can follow a finger on the UI thread.
  */
 import type { UnpluggedListener } from '@sudobility/music_types';
 import { DEFAULT_FOV_DEG } from './project';
@@ -19,12 +21,14 @@ export interface DragViewport {
 const toDeg = 180 / Math.PI;
 
 function focalLength(viewport: DragViewport): number {
+  'worklet';
   const fov = ((viewport.fovDeg ?? DEFAULT_FOV_DEG) * Math.PI) / 180;
   return viewport.height / 2 / Math.tan(fov / 2);
 }
 
 /** Pixel `px`'s bearing from the view's centre line, in degrees, positive to the right. */
 function bearingInView(viewport: DragViewport, px: number): number {
+  'worklet';
   return Math.atan((px - viewport.width / 2) / focalLength(viewport)) * toDeg;
 }
 
@@ -37,6 +41,7 @@ export function listenerForStageDrag(
   startX: number,
   x: number
 ): UnpluggedListener {
+  'worklet';
   if (viewport.width <= 0 || viewport.height <= 0) return start;
   return {
     x: start.x,
@@ -50,5 +55,6 @@ export function listenerForStageDrag(
 }
 
 function normalizeDeg(deg: number): number {
+  'worklet';
   return ((((deg + 180) % 360) + 360) % 360) - 180;
 }

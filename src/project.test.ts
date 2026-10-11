@@ -1,8 +1,22 @@
 import { describe, expect, it } from 'vitest';
-import { BufferGeometry, Float32BufferAttribute } from 'three';
+import {
+  BufferGeometry,
+  Euler,
+  Float32BufferAttribute,
+  Matrix4,
+  Quaternion,
+  Vector3,
+} from 'three';
 import { twoTrackScore } from '@sudobility/music_types/test';
 import { buildScene, type SpatialInstrument, type SpatialScene } from './scene';
-import { FOG_FAR, FOG_NEAR, fogFade, projectScene } from './project';
+import {
+  FOG_FAR,
+  FOG_NEAR,
+  fogFade,
+  projectScene,
+  projectWorld,
+  worldStage,
+} from './project';
 
 const VIEW = { width: 400, height: 300 };
 const EAR = 1.6;
@@ -165,5 +179,77 @@ describe('fogFade', () => {
     expect(fogFade(FOG_FAR)).toBe(1);
     expect(fogFade(FOG_FAR + 10)).toBe(1);
     expect(fogFade((FOG_NEAR + FOG_FAR) / 2)).toBeCloseTo(0.5);
+  });
+});
+
+describe('projectWorld', () => {
+  // The reference is three's own camera: the inverse of the camera's world
+  // matrix, as the projector before `projectWorld` composed it. Holding the
+  // plain-arithmetic projector to it is what lets the worklet stand in for
+  // three without a second, hand-derived convention for rotation order.
+  function threeReference(
+    camera: { position: readonly number[]; rotation: readonly number[] },
+    point: readonly [number, number, number]
+  ) {
+    const [cx, cy, cz] = camera.position;
+    const [rx, ry, rz] = camera.rotation;
+    const view = new Matrix4()
+      .compose(
+        new Vector3(cx, cy, cz),
+        new Quaternion().setFromEuler(new Euler(rx, ry, rz, 'XYZ')),
+        new Vector3(1, 1, 1)
+      )
+      .invert();
+    const v = new Vector3(...point).applyMatrix4(view);
+    expect(v.z).toBeLessThan(0);
+    const focal = VIEW.height / 2 / Math.tan((35 * Math.PI) / 180);
+    return [
+      VIEW.width / 2 + (v.x / -v.z) * focal,
+      VIEW.height / 2 - (v.y / -v.z) * focal,
+    ];
+  }
+
+  it('agrees with three for a camera turned about every axis', () => {
+    const camera = {
+      position: [0.4, 1.6, -0.7] as const,
+      rotation: [0.15, 2.6, -0.1] as const,
+    };
+    // Points in front of that camera (a yaw of 2.6 looks toward +z), a few
+    // metres out.
+    const a = [-1.3, 1.2, 5] as const;
+    const b = [0.6, 2.1, 4.2] as const;
+    const stage = {
+      floor: [],
+      floorAxes: [],
+      ring: [],
+      instruments: [
+        {
+          trackId: 't',
+          color: 'grey',
+          litColor: 'white',
+          position: [0, 0, 5] as const,
+          segments: [...a, ...b],
+        },
+      ],
+    };
+    const [inst] = projectWorld(stage, [], camera, VIEW).instruments;
+    const [x0, y0, x1, y1] = inst.segments;
+    const [ex0, ey0] = threeReference(camera, a);
+    const [ex1, ey1] = threeReference(camera, b);
+    expect(x0).toBeCloseTo(ex0, 6);
+    expect(y0).toBeCloseTo(ey0, 6);
+    expect(x1).toBeCloseTo(ex1, 6);
+    expect(y1).toBeCloseTo(ey1, 6);
+  });
+
+  it('takes lit from the ids it is handed, not from the world stage', () => {
+    const scene = sceneOf(
+      instrumentAt([0, 0, 5], segmentGeometry([0, 1, 0], [0, 2, 0]), 'a'),
+      instrumentAt([1, 0, 5], segmentGeometry([0, 1, 0], [0, 2, 0]), 'b')
+    );
+    const stage = worldStage(scene.instruments);
+    const lit = projectWorld(stage, ['b'], CAMERA, VIEW).instruments;
+    expect(lit.find(i => i.trackId === 'a')!.lit).toBe(false);
+    expect(lit.find(i => i.trackId === 'b')!.lit).toBe(true);
   });
 });

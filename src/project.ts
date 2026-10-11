@@ -27,9 +27,25 @@
  * web canvas's linear fog, applied as a per-segment fade for the floor
  * (whose lines run the whole depth of the stage) and per instrument
  * (small enough that one distance describes it).
+ *
+ * ## Two halves, so the camera can move on another thread
+ *
+ * `worldStage` does everything that does not depend on the camera — every
+ * instrument's strokes through its own transform into world space, with
+ * three — and changes only when the score or the arrangement does.
+ * `projectWorld` takes that and a camera to pixels in plain arithmetic, and
+ * is a worklet: it calls nothing but other worklets, so a React Native host
+ * can run it on the UI thread for every frame of a drag without the
+ * JavaScript thread taking part. `projectScene` is the two together, so
+ * there is one projector, not a three one and a fast one to drift apart.
  */
 import { Euler, Matrix4, Quaternion, Vector3 } from 'three';
-import type { SpatialInstrument, SpatialScene } from './scene';
+import type {
+  SpatialCamera,
+  SpatialInstrument,
+  SpatialScene,
+  Vec3Tuple,
+} from './scene';
 import { UNPLUGGED_RADIUS } from '@sudobility/music_types';
 
 export interface Viewport {
@@ -99,6 +115,7 @@ const RING_Y = 0.005;
 
 /** How faded a point at `distance` from the eye is: 0 clear, 1 gone. */
 export function fogFade(distance: number): number {
+  'worklet';
   const t = (distance - FOG_NEAR) / (FOG_FAR - FOG_NEAR);
   return t <= 0 ? 0 : t >= 1 ? 1 : t;
 }
@@ -107,188 +124,290 @@ export function projectScene(
   scene: SpatialScene,
   viewport: Viewport
 ): ProjectedScene {
-  const projector = new Projector(scene, viewport);
+  return projectWorld(
+    worldStage(scene.instruments),
+    scene.instruments.filter(i => i.lit).map(i => i.trackId),
+    scene.camera,
+    viewport
+  );
+}
+
+/** Flat `[ax, ay, az, bx, by, bz, ...]` world coordinates, one segment per six numbers. */
+export type WorldSegments = readonly number[];
+
+/** One instrument's strokes in world space — everything but whether it sounds. */
+export interface WorldInstrument {
+  readonly trackId: string;
+  readonly color: string;
+  readonly litColor: string;
+  /** Its origin, which the fog and the painter's order measure from. */
+  readonly position: Vec3Tuple;
+  readonly segments: WorldSegments;
+}
+
+/** The stage with no camera: what `projectWorld` projects. */
+export interface WorldStage {
+  readonly floor: WorldSegments;
+  readonly floorAxes: WorldSegments;
+  readonly ring: WorldSegments;
+  readonly instruments: readonly WorldInstrument[];
+}
+
+/**
+ * The camera-independent half: each instrument's strokes carried through its
+ * own position, rotation and scale. Whether one is lit is left out on
+ * purpose, so a note starting changes nothing here.
+ */
+export function worldStage(
+  instruments: readonly SpatialInstrument[]
+): WorldStage {
   return {
-    floor: projector.floor(false),
-    floorAxes: projector.floor(true),
-    ring: projector.ring(),
-    instruments: scene.instruments
-      .map(instrument => projector.instrument(instrument))
-      .sort((a, b) => b.distance - a.distance),
+    floor: FLOOR_MINOR,
+    floorAxes: FLOOR_AXES,
+    ring: RING,
+    instruments: instruments.map(worldInstrument),
   };
 }
 
-class Projector {
-  private readonly view = new Matrix4();
-  private readonly halfWidth: number;
-  private readonly halfHeight: number;
-  /** Pixels per unit of x/z over -z_view, from the field of view. */
-  private readonly focalY: number;
-  private readonly focalX: number;
-  private readonly eye: Vector3;
+function worldInstrument(instrument: SpatialInstrument): WorldInstrument {
+  const [px, py, pz] = instrument.position;
+  const [rx, ry, rz] = instrument.rotation;
+  const model = new Matrix4().compose(
+    new Vector3(px, py, pz),
+    new Quaternion().setFromEuler(new Euler(rx, ry, rz, 'XYZ')),
+    new Vector3(instrument.scale, instrument.scale, instrument.scale)
+  );
+  const positions = instrument.geometry.getAttribute('position');
+  const segments: number[] = [];
+  const v = new Vector3();
+  for (let i = 0; i + 1 < positions.count; i += 2) {
+    v.fromBufferAttribute(positions, i).applyMatrix4(model);
+    segments.push(v.x, v.y, v.z);
+    v.fromBufferAttribute(positions, i + 1).applyMatrix4(model);
+    segments.push(v.x, v.y, v.z);
+  }
+  return {
+    trackId: instrument.trackId,
+    color: instrument.color,
+    litColor: instrument.litColor,
+    position: instrument.position,
+    segments,
+  };
+}
 
-  constructor(scene: SpatialScene, viewport: Viewport) {
-    const fov = ((viewport.fovDeg ?? DEFAULT_FOV_DEG) * Math.PI) / 180;
-    this.halfWidth = viewport.width / 2;
-    this.halfHeight = viewport.height / 2;
+/** The grid, one metre a segment so the fog can vary along a line. */
+function floorSegments(axesOnly: boolean): number[] {
+  const half = GRID_SIZE / 2;
+  const step = GRID_SIZE / GRID_DIVISIONS;
+  const out: number[] = [];
+  for (let i = 0; i <= GRID_DIVISIONS; i++) {
+    const k = -half + i * step;
+    if ((k === 0) !== axesOnly) continue;
+    for (let j = 0; j < GRID_DIVISIONS; j++) {
+      const s = -half + j * step;
+      // A line along z at x = k, then along x at z = k.
+      out.push(k, 0, s, k, 0, s + step);
+      out.push(s, 0, k, s + step, 0, k);
+    }
+  }
+  return out;
+}
+
+function ringSegments(): number[] {
+  const out: number[] = [];
+  for (let i = 0; i < RING_SEGMENTS; i++) {
+    const a0 = (Math.PI * i) / RING_SEGMENTS;
+    const a1 = (Math.PI * (i + 1)) / RING_SEGMENTS;
+    out.push(
+      Math.cos(a0) * UNPLUGGED_RADIUS,
+      RING_Y,
+      Math.sin(a0) * UNPLUGGED_RADIUS,
+      Math.cos(a1) * UNPLUGGED_RADIUS,
+      RING_Y,
+      Math.sin(a1) * UNPLUGGED_RADIUS
+    );
+  }
+  return out;
+}
+
+const FLOOR_MINOR: WorldSegments = floorSegments(false);
+const FLOOR_AXES: WorldSegments = floorSegments(true);
+const RING: WorldSegments = ringSegments();
+
+/**
+ * The view transform and the lens, as plain numbers a worklet can carry:
+ * the camera's rotation as three's XYZ Euler matrix (row-major here), whose
+ * transpose takes world offsets from the eye into view space.
+ */
+interface Lens {
+  readonly ex: number;
+  readonly ey: number;
+  readonly ez: number;
+  readonly r: readonly number[];
+  readonly halfWidth: number;
+  readonly halfHeight: number;
+  readonly focal: number;
+}
+
+function lensFor(camera: SpatialCamera, viewport: Viewport): Lens {
+  'worklet';
+  const fov = ((viewport.fovDeg ?? DEFAULT_FOV_DEG) * Math.PI) / 180;
+  const halfHeight = viewport.height / 2;
+  const [rx, ry, rz] = camera.rotation;
+  // three's Matrix4.makeRotationFromEuler, order 'XYZ'.
+  const a = Math.cos(rx);
+  const b = Math.sin(rx);
+  const c = Math.cos(ry);
+  const d = Math.sin(ry);
+  const e = Math.cos(rz);
+  const f = Math.sin(rz);
+  const ae = a * e;
+  const af = a * f;
+  const be = b * e;
+  const bf = b * f;
+  return {
+    ex: camera.position[0],
+    ey: camera.position[1],
+    ez: camera.position[2],
+    // prettier-ignore
+    r: [
+      c * e, -c * f, d,
+      af + be * d, ae - bf * d, -b * c,
+      bf - ae * d, be + af * d, a * c,
+    ],
+    halfWidth: viewport.width / 2,
+    halfHeight,
     // A vertical field of view: the top of the view is tan(fov/2) units up
     // per unit of depth, whatever the aspect, so the horizontal extent
     // follows from the pixel aspect exactly as three's PerspectiveCamera.
-    this.focalY = this.halfHeight / Math.tan(fov / 2);
-    this.focalX = this.focalY;
+    focal: halfHeight / Math.tan(fov / 2),
+  };
+}
 
-    const [cx, cy, cz] = scene.camera.position;
-    const [rx, ry, rz] = scene.camera.rotation;
-    this.eye = new Vector3(cx, cy, cz);
-    const cameraWorld = new Matrix4().compose(
-      this.eye,
-      new Quaternion().setFromEuler(new Euler(rx, ry, rz, 'XYZ')),
-      new Vector3(1, 1, 1)
-    );
-    this.view.copy(cameraWorld).invert();
-  }
-
-  instrument(instrument: SpatialInstrument): ProjectedInstrument {
-    const [px, py, pz] = instrument.position;
-    const [rx, ry, rz] = instrument.rotation;
-    const model = new Matrix4().compose(
-      new Vector3(px, py, pz),
-      new Quaternion().setFromEuler(new Euler(rx, ry, rz, 'XYZ')),
-      new Vector3(instrument.scale, instrument.scale, instrument.scale)
-    );
-    const modelView = new Matrix4().multiplyMatrices(this.view, model);
-
-    const segments: number[] = [];
-    const a = new Vector3();
-    const b = new Vector3();
-    const positions = instrument.geometry.getAttribute('position');
-    for (let i = 0; i + 1 < positions.count; i += 2) {
-      a.fromBufferAttribute(positions, i).applyMatrix4(modelView);
-      b.fromBufferAttribute(positions, i + 1).applyMatrix4(modelView);
-      this.pushSegment(segments, a, b);
+/**
+ * Segment `i` of `world` (six numbers from `i`) to pixels, clipped to the
+ * near plane: a segment crossing it is cut at the plane rather than dropped,
+ * so a floor line running under the listener's feet still reaches the bottom
+ * of the view, and one wholly behind the eye is not drawn at all —
+ * projecting a point behind the camera flips it through the origin, which is
+ * the scribble a naive projector draws when the listener stands inside the
+ * stage.
+ */
+function projectSegment(
+  out: number[],
+  lens: Lens,
+  world: WorldSegments,
+  i: number
+): void {
+  'worklet';
+  const r = lens.r;
+  const dax = world[i] - lens.ex;
+  const day = world[i + 1] - lens.ey;
+  const daz = world[i + 2] - lens.ez;
+  const dbx = world[i + 3] - lens.ex;
+  const dby = world[i + 4] - lens.ey;
+  const dbz = world[i + 5] - lens.ez;
+  // View = Rᵀ · (p − eye).
+  let ax = r[0] * dax + r[3] * day + r[6] * daz;
+  let ay = r[1] * dax + r[4] * day + r[7] * daz;
+  let az = r[2] * dax + r[5] * day + r[8] * daz;
+  let bx = r[0] * dbx + r[3] * dby + r[6] * dbz;
+  let by = r[1] * dbx + r[4] * dby + r[7] * dbz;
+  let bz = r[2] * dbx + r[5] * dby + r[8] * dbz;
+  // View space looks down -z; "in front" is z < -NEAR_PLANE.
+  const aIn = az < -NEAR_PLANE;
+  const bIn = bz < -NEAR_PLANE;
+  if (!aIn && !bIn) return;
+  if (!aIn || !bIn) {
+    const t = (-NEAR_PLANE - az) / (bz - az);
+    const cx = ax + (bx - ax) * t;
+    const cy = ay + (by - ay) * t;
+    if (aIn) {
+      bx = cx;
+      by = cy;
+      bz = -NEAR_PLANE;
+    } else {
+      ax = cx;
+      ay = cy;
+      az = -NEAR_PLANE;
     }
+  }
+  out.push(
+    lens.halfWidth + (ax / -az) * lens.focal,
+    lens.halfHeight - (ay / -az) * lens.focal,
+    lens.halfWidth + (bx / -bz) * lens.focal,
+    lens.halfHeight - (by / -bz) * lens.focal
+  );
+}
 
-    const distance = this.eye.distanceTo(new Vector3(px, py, pz));
-    return {
+/**
+ * Lines with a fog level per segment, measured at the midpoint, grouped
+ * into `FADE_STEPS` levels so a platform draws them in a handful of calls
+ * rather than one per segment. Far levels first.
+ */
+function projectFaded(lens: Lens, world: WorldSegments): FadedSegments[] {
+  'worklet';
+  const buckets: number[][] = [];
+  for (let level = 0; level < FADE_STEPS; level++) buckets.push([]);
+  for (let i = 0; i + 5 < world.length; i += 6) {
+    const mx = (world[i] + world[i + 3]) / 2 - lens.ex;
+    const my = (world[i + 1] + world[i + 4]) / 2 - lens.ey;
+    const mz = (world[i + 2] + world[i + 5]) / 2 - lens.ez;
+    const fade = fogFade(Math.sqrt(mx * mx + my * my + mz * mz));
+    if (fade >= 1) continue;
+    const level = Math.min(FADE_STEPS - 1, Math.floor(fade * FADE_STEPS));
+    projectSegment(buckets[level], lens, world, i);
+  }
+  const batches: FadedSegments[] = [];
+  for (let level = FADE_STEPS - 1; level >= 0; level--) {
+    if (buckets[level].length > 0) {
+      batches.push({
+        segments: buckets[level],
+        fade: (level + 0.5) / FADE_STEPS,
+      });
+    }
+  }
+  return batches;
+}
+
+/**
+ * The camera-dependent half: `stage` through `camera` onto `viewport`. A
+ * worklet — see the module doc — so it may run on a UI thread.
+ */
+export function projectWorld(
+  stage: WorldStage,
+  litTrackIds: readonly string[],
+  camera: SpatialCamera,
+  viewport: Viewport
+): ProjectedScene {
+  'worklet';
+  const lens = lensFor(camera, viewport);
+  const instruments: ProjectedInstrument[] = [];
+  for (const instrument of stage.instruments) {
+    const segments: number[] = [];
+    const world = instrument.segments;
+    for (let i = 0; i + 5 < world.length; i += 6) {
+      projectSegment(segments, lens, world, i);
+    }
+    const dx = instrument.position[0] - lens.ex;
+    const dy = instrument.position[1] - lens.ey;
+    const dz = instrument.position[2] - lens.ez;
+    const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    instruments.push({
       trackId: instrument.trackId,
-      lit: instrument.lit,
+      lit: litTrackIds.includes(instrument.trackId),
       color: instrument.color,
       litColor: instrument.litColor,
       segments,
       fade: fogFade(distance),
       distance,
-    };
+    });
   }
-
-  /** The grid, one metre a segment so the fog can vary along a line. */
-  floor(axesOnly: boolean): FadedSegments[] {
-    const half = GRID_SIZE / 2;
-    const step = GRID_SIZE / GRID_DIVISIONS;
-    const buckets = new FadeBuckets();
-    const a = new Vector3();
-    const b = new Vector3();
-    for (let i = 0; i <= GRID_DIVISIONS; i++) {
-      const k = -half + i * step;
-      const isAxis = k === 0;
-      if (isAxis !== axesOnly) continue;
-      for (let j = 0; j < GRID_DIVISIONS; j++) {
-        const s = -half + j * step;
-        // A line along z at x = k, then along x at z = k.
-        a.set(k, 0, s);
-        b.set(k, 0, s + step);
-        this.pushWorldSegment(buckets, a, b);
-        a.set(s, 0, k);
-        b.set(s + step, 0, k);
-        this.pushWorldSegment(buckets, a, b);
-      }
-    }
-    return buckets.batches();
-  }
-
-  ring(): FadedSegments[] {
-    const buckets = new FadeBuckets();
-    const a = new Vector3();
-    const b = new Vector3();
-    for (let i = 0; i < RING_SEGMENTS; i++) {
-      const a0 = (Math.PI * i) / RING_SEGMENTS;
-      const a1 = (Math.PI * (i + 1)) / RING_SEGMENTS;
-      a.set(
-        Math.cos(a0) * UNPLUGGED_RADIUS,
-        RING_Y,
-        Math.sin(a0) * UNPLUGGED_RADIUS
-      );
-      b.set(
-        Math.cos(a1) * UNPLUGGED_RADIUS,
-        RING_Y,
-        Math.sin(a1) * UNPLUGGED_RADIUS
-      );
-      this.pushWorldSegment(buckets, a, b);
-    }
-    return buckets.batches();
-  }
-
-  private pushWorldSegment(buckets: FadeBuckets, a: Vector3, b: Vector3) {
-    const fade = fogFade(
-      this.eye.distanceTo(
-        new Vector3((a.x + b.x) / 2, (a.y + b.y) / 2, (a.z + b.z) / 2)
-      )
-    );
-    if (fade >= 1) return;
-    a.applyMatrix4(this.view);
-    b.applyMatrix4(this.view);
-    this.pushSegment(buckets.for(fade), a, b);
-  }
-
-  /**
-   * One view-space segment to pixels, clipped to the near plane: a segment
-   * crossing it is cut at the plane rather than dropped, so a floor line
-   * running under the listener's feet still reaches the bottom of the view,
-   * and one wholly behind the eye is not drawn at all — projecting a point
-   * behind the camera flips it through the origin, which is the scribble a
-   * naive projector draws when the listener stands inside the stage.
-   */
-  private pushSegment(out: number[], a: Vector3, b: Vector3): void {
-    // View space looks down -z; "in front" is z < -NEAR_PLANE.
-    const aIn = a.z < -NEAR_PLANE;
-    const bIn = b.z < -NEAR_PLANE;
-    if (!aIn && !bIn) return;
-    if (!aIn || !bIn) {
-      const t = (-NEAR_PLANE - a.z) / (b.z - a.z);
-      const cx = a.x + (b.x - a.x) * t;
-      const cy = a.y + (b.y - a.y) * t;
-      if (aIn) b.set(cx, cy, -NEAR_PLANE);
-      else a.set(cx, cy, -NEAR_PLANE);
-    }
-    out.push(
-      this.halfWidth + (a.x / -a.z) * this.focalX,
-      this.halfHeight - (a.y / -a.z) * this.focalY,
-      this.halfWidth + (b.x / -b.z) * this.focalX,
-      this.halfHeight - (b.y / -b.z) * this.focalY
-    );
-  }
-}
-
-/** Segments grouped into `FADE_STEPS` fade levels, so a platform draws the
- *  floor in a handful of calls rather than one per segment. */
-class FadeBuckets {
-  private readonly buckets = new Map<number, number[]>();
-
-  for(fade: number): number[] {
-    const level = Math.min(FADE_STEPS - 1, Math.floor(fade * FADE_STEPS));
-    let bucket = this.buckets.get(level);
-    if (!bucket) {
-      bucket = [];
-      this.buckets.set(level, bucket);
-    }
-    return bucket;
-  }
-
-  batches(): FadedSegments[] {
-    return [...this.buckets.entries()]
-      .sort((x, y) => y[0] - x[0])
-      .map(([level, segments]) => ({
-        segments,
-        fade: (level + 0.5) / FADE_STEPS,
-      }));
-  }
+  instruments.sort((a, b) => b.distance - a.distance);
+  return {
+    floor: projectFaded(lens, stage.floor),
+    floorAxes: projectFaded(lens, stage.floorAxes),
+    ring: projectFaded(lens, stage.ring),
+    instruments,
+  };
 }

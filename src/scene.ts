@@ -88,6 +88,7 @@ export const EAR_HEIGHT = 1.6;
 const AUDIENCE_YAW = Math.PI;
 
 function degToRad(deg: number): number {
+  'worklet';
   return (deg * Math.PI) / 180;
 }
 
@@ -141,6 +142,7 @@ export function buildInstruments(
 
 /** The camera transform for `listener`: ear height, x mirrored, yaw from its facing. */
 export function cameraFor(listener: UnpluggedListener): SpatialCamera {
+  'worklet';
   return {
     position: [-listener.x, EAR_HEIGHT, listener.z],
     // Three.js cameras look down their local -Z. With x mirrored, a
