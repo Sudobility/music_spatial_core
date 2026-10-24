@@ -126,7 +126,6 @@
 
     "@sudobility/music_types": ["@sudobility/music_types@0.13.59", "https://npm.pkg.github.com/download/@sudobility/music_types/0.13.59/d4216f3795dba11bb8ba6b43dea2046f04db3e9c", { "peerDependencies": { "@sudobility/types": "^1.9.76", "immer": "^10.0.0 || ^11.0.0", "zod": "^4.0.0" } }, "sha512-DyWCDGi5V0IBEbMiMv9d8FgjCmV7hY2ft7v3Quj0rcR63aSSBAA7joQWnziVhgfUJXru5uUjFuLhOFbeObBa8g=="],
 
-    "@sudobility/types": ["@sudobility/types@1.9.67", "https://npm.pkg.github.com/@sudobility/types/-/types-1.9.67.tgz", {}, "sha512-d+jk4L9i8VNvOnCJW/craqiiUTPH5aRq4KYe/QBrBU3mCcTfoYjgzzXopVQRcthiZ5dwQAEpdqCTQ0gAWRN6Ww=="],
 
     "@testing-library/dom": ["@testing-library/dom@10.4.2", "", { "dependencies": { "@babel/code-frame": "^7.10.4", "@babel/runtime": "^7.12.5", "@types/aria-query": "^5.0.1", "aria-query": "5.3.0", "dom-accessibility-api": "^0.5.9", "lz-string": "^1.5.0", "picocolors": "1.1.1", "pretty-format": "^27.0.2" } }, "sha512-yzr2S9HyAIdhz2/6qHgbs665Q7PKVcDF05vsOlHPxG1mo36gKVesdYVeDLnXgfjJ03CrKRk08knc6+E/9m8v2Q=="],
 
