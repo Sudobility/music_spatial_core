@@ -32,6 +32,18 @@ function bearingInView(viewport: DragViewport, px: number): number {
   return Math.atan((px - viewport.width / 2) / focalLength(viewport)) * toDeg;
 }
 
+// Defined before its callers on purpose. The worklets Babel plugin rewrites
+// each of these `function` declarations into a non-hoisted
+// `var f = <factory>({ ...referenced worklets... })` assignment, and those run
+// in source order. A worklet that referenced a helper defined *below* it would
+// capture that helper as `undefined` in its closure and fail on the UI thread
+// with "normalizeDeg is not a function" the moment a drag ran. So every helper
+// a worklet calls must appear above it here.
+function normalizeDeg(deg: number): number {
+  'worklet';
+  return ((((deg + 180) % 360) + 360) % 360) - 180;
+}
+
 /**
  * The listener when a horizontal drag from `startX` has reached `x`.
  */
@@ -52,9 +64,4 @@ export function listenerForStageDrag(
         bearingInView(viewport, x)
     ),
   };
-}
-
-function normalizeDeg(deg: number): number {
-  'worklet';
-  return ((((deg + 180) % 360) + 360) % 360) - 180;
 }
