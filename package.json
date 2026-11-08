@@ -1,6 +1,6 @@
 {
   "name": "@sudobility/music_spatial_core",
-  "version": "0.0.30",
+  "version": "0.0.31",
   "description": "Platform-agnostic engine behind the Moosiac Spatial view: instrument geometry, scene composition, camera/listener math, movement, and map-overlay math shared by music_spatial and music_spatial_rn.",
   "type": "module",
   "main": "./dist/index.js",
@@ -33,13 +33,13 @@
   },
   "dependencies": {},
   "peerDependencies": {
-    "@sudobility/music_types": "^0.13.62",
+    "@sudobility/music_types": "^0.13.64",
     "react": ">=18",
     "three": "^0.160.0"
   },
   "devDependencies": {
     "@eslint/js": "~10.0.1",
-    "@sudobility/music_types": "^0.13.62",
+    "@sudobility/music_types": "^0.13.64",
     "@testing-library/react": "~16.3.3",
     "@types/react": "~19.3.0",
     "@types/react-dom": "~19.3.0",
